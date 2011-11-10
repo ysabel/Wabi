@@ -35,7 +35,9 @@ mboot:
 
 start:
    ;; Grab the info about where our kernel got loaded
-   mov   edi, [ebx + 24]
+   ;; This is a hack full of assumptions, but hey.
+   mov   eax, [ebx + 24]
+   mov   [boot_info], eax
    ;; Enable long mode:
    ;; Disable paging (this may not be necessary, not sure what GRUB did for us)
    mov   eax, cr0
@@ -45,27 +47,53 @@ start:
    mov   edi, 0x1000
    mov   cr3, edi
    xor   eax, eax
-   mov   ecx, 4096
+   mov   ecx, 8192
    rep   stosd
    mov   edi, cr3
    ;; PML4T is at 0x1000
-   ;; PDPT is at 0x2000
-   ;; PDT is at 0x3000
-   ;; PT is at 0x4000
+   ;; PDPT0 is at 0x2000
+   ;; PDT0,0 is at 0x3000
+   ;; PT0,0,0 is at 0x4000
+   ;; PDPT511 is at 0x5000
+   ;; PDT511,510 is at 0x6000
+   ;; PT1511,510,0 is at 0x7000
    mov   DWORD [edi], 0x2003
-   add   edi, 0x1000
+   add   edi, 0x0FF8
+   mov   DWORD [edi], 0x5003
+   add   edi, 8
    mov   DWORD [edi], 0x3003
    add   edi, 0x1000
+   ;; Identity map the first two megabytes
    mov   DWORD [edi], 0x4003
    add   edi, 0x1000
-   ;; Identity map the first two megabytes
    mov   ebx, 0x00000003
    mov   ecx, 512
-set_entry:
+set_identity_entry:
    mov   DWORD [edi], ebx
    add   ebx, 0x1000
    add   edi, 8
-   loop  set_entry
+   loop  set_identity_entry
+   
+   ;; And map our higher-half kernel
+   ;; Bits 47:39 - 111111111 = 511
+   ;; Bits 38:30 - 111111110 = 510
+   ;; Bits 29:21 - 000000000 = 0
+   ;; Bits 20:12 - 100000000 = 256
+   ;; Bits 11:0 are the page frame.
+   add   edi, 0x0FF0
+   mov   DWORD [edi], 0x6003
+   add   edi, 16
+   mov   DWORD [edi], 0x7003
+   add   edi, 0x1000
+   mov   ebx, [boot_info]
+   or    ebx, 0x03
+   mov   ecx, 512
+set_hh_entry:
+   mov   DWORD [edi], ebx
+   add   ebx, 0x1000
+   add   edi, 8
+   loop  set_hh_entry
+   
    ;; Now enable PAE-paging
    mov   eax, cr4
    or    eax, 1<<5              ; Set PAE (5th bit)
@@ -137,6 +165,10 @@ realm64:
    mov   es, ax
    mov   fs, ax
    mov   gs, ax
-   mov   rdi, 0xFFFFFFFFC0000000 ; This should be the mod location instead.
+   mov   rdi, 0xFFFFFFFF80100000 ; The start of our 64-bit kernel.
    push  rdi
    ret
+
+   section .bss
+boot_info:
+   resd  1
