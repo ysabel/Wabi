@@ -1,0 +1,3 @@
+If you're curious about the name: http://en.wikipedia.org/wiki/Wabi-sabi
+
+64-bit higher-half kernel written in assembly, which provides the bare minimum necessary for a LISP interpreter.  Hopefully then I'll write the rest of the OS-level services in LISP.
