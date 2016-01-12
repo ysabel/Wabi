@@ -1,5 +1,4 @@
 #pragma once
-#include "Parser.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -9,6 +8,9 @@
 #include <iostream>
 #include <memory>
 #include <string>
+
+#include "Environment.h"
+#include "Parser.h"
 
 namespace Wabi {
     class syntax_error : public std::runtime_error {
@@ -28,16 +30,22 @@ namespace Wabi {
         explicit parentheses_overflow(const std::string& what) : std::overflow_error(what) {}
         explicit parentheses_overflow(const char *what) : std::overflow_error(what) {}
     };
+
+    class Cons;
     
     class Sexp {
     public:
         virtual ~Sexp() {}
-        virtual std::unique_ptr<Sexp> eval() const {
+        virtual std::unique_ptr<Sexp> eval(Environment& environment = Global) const {
             return std::unique_ptr<Sexp>(copy());
         }
+        virtual void bind(const Cons *arguments, Environment& environment = Global) {
+            throw std::invalid_argument("Cannot bind arguments to a non-function.");
+        }
 
+        virtual operator std::string() const { return ""; }
         virtual Sexp* copy() const { return new Sexp(*this); }
-        virtual void print(std::ostream &stream) const {}
+        virtual void print(std::ostream &stream) const { stream << (std::string)(*this); }
         virtual void dump(std::ostream &stream) const {
             stream << "(Sexp)";
         }
@@ -57,10 +65,8 @@ namespace Wabi {
         Integer(long value) : value(value) {}
         long value;
         
+        virtual operator std::string() const { return std::to_string(value); }
         virtual Sexp* copy() const { return new Integer(*this); }
-        virtual void print(std::ostream &stream) const {
-            stream << value;
-        }
         virtual void dump(std::ostream &stream) const {
             stream << "(Integer";
             Atom::dump(stream);
@@ -72,10 +78,8 @@ namespace Wabi {
         Float(float value) : value(value) {}
         float value;
         
+        virtual operator std::string() const { return std::to_string(value); }
         virtual Sexp* copy() const { return new Float(*this); }
-        virtual void print(std::ostream &stream) const {
-            stream << value;
-        }
         virtual void dump(std::ostream &stream) const {
             stream << "(Float";
             Atom::dump(stream);
@@ -88,10 +92,8 @@ namespace Wabi {
         // For the moment, anyway
         std::string value;
         
+        virtual operator std::string() const { return value; }
         virtual Sexp* copy() const { return new Symbol(*this); }
-        virtual void print(std::ostream &stream) const {
-            stream << value;
-        }
         virtual void dump(std::ostream &stream) const {
             stream << "(Symbol";
             Atom::dump(stream);
@@ -104,9 +106,13 @@ namespace Wabi {
         Cons(Sexp *car = nullptr, Sexp *cdr = nullptr)
             : car(std::unique_ptr<Sexp>(car)),
               cdr(std::unique_ptr<Sexp>(cdr)) {}
+        Cons(std::unique_ptr<Sexp>&& car)
+            : car(std::move(car)),
+              cdr(std::unique_ptr<Sexp>(nullptr)) {}
         Cons(std::unique_ptr<Sexp>&& car,
              std::unique_ptr<Sexp>&& cdr)
-            : car(std::move(car)), cdr(std::move(cdr)) {}
+            : car(std::move(car)),
+              cdr(std::move(cdr)) {}
         std::unique_ptr<Sexp> car;
         std::unique_ptr<Sexp> cdr;
 
@@ -116,9 +122,11 @@ namespace Wabi {
         }
         virtual void print(std::ostream &stream) const {
             stream << "(";
-            car->print(stream);
+            if (nullptr != car.get()) { car->print(stream); }
+            else { stream << "nil"; }
             stream << " . ";
-            cdr->print(stream);
+            if (nullptr != cdr.get()) { cdr->print(stream); }
+            else { stream << "nil"; }
             stream << ")";
         }
         virtual void dump(std::ostream &stream) const {
@@ -139,7 +147,17 @@ namespace Wabi {
         const Cons* head() const { return head_.get(); }
         Cons* tail() { return tail_; }
         const Cons* tail() const { return tail_; }
-        
+
+        void push(std::unique_ptr<Sexp>&& sexp) {
+            if (nullptr == tail_) {
+                head_ = std::make_unique<Cons>(std::move(sexp));
+                tail_ = head();
+            } else {
+                Cons *newtail = new Cons(std::move(sexp));
+                tail_->cdr = std::unique_ptr<Cons>(newtail);
+                tail_ = newtail;
+            }
+        }
         void push(Sexp *sexp) {
             if (nullptr == tail_) {
                 head_ = std::make_unique<Cons>(sexp);
@@ -159,10 +177,7 @@ namespace Wabi {
         }
         
 
-        virtual std::unique_ptr<Sexp> eval() const {
-            // TODO: implement List::eval()
-            return std::unique_ptr<Sexp>(new List());
-        }
+        virtual std::unique_ptr<Sexp> eval(Environment& environment = Global) const;
 
         virtual Sexp* copy() const {
             throw std::logic_error("List::copy currently unimplemented.");
@@ -192,68 +207,8 @@ namespace Wabi {
         Cons *tail_;
     };
 
-    Atom *makeAtom(const Token &token) {
-        if (!isdigit(token.text[0]) &&
-            '-' != token.text[0] &&
-            '+' != token.text[0]) {
-            return new Symbol(token.length, token.text);
-        }
-
-        if ('0' == token.text[0]) {
-            if ('x' == token.text[1] || 'X' == token.text[1]) {
-                // Hex constant?
-                std::string t(token.text, token.length);
-                size_t next;
-                long value = std::stol(t, &next, 16);
-                if (token.length != next) {
-                    throw syntax_error("Couldn't parse token '" + t + "' as hex constant.");
-                }
-                return new Integer(value);
-            }
-
-            if ('b' == token.text[1] || 'B' == token.text[1]) {
-                // Binary constant?
-                std::string t(token.text + 2, token.length - 2);
-                size_t next;
-                long value = std::stol(t, &next, 2);
-                if (token.length - 2 != next) {
-                    throw syntax_error("Couldn't parse token '" + t + "' as binary constant.");
-                }
-                return new Integer(value);
-            }
-            
-            // Octal constant?
-            std::string t(token.text, token.length);
-            size_t next;
-            long value = std::stol(t, &next, 8);
-            if (token.length != next) {
-                throw syntax_error("Couldn't parse token '" + t + "' as octal constant.");
-            }
-            return new Integer(value);
-        }                        
-
-        // See if there's a decimal point anywhere
-        for (size_t c = 0; c < token.length; ++c) {
-            if ('.' == token.text[c]) {
-                std::string t(token.text, token.length);
-                size_t next;
-                float value = std::stof(t, &next);
-                if (token.length != next) {
-                    throw syntax_error("Couldn't parse token '" + t + "' as float.");
-                }
-                return new Float(value);
-            }
-        }
-        
-        std::string t(token.text, token.length);
-        size_t next;
-        long value = std::stol(t, &next);
-        if (token.length != next) {
-            throw syntax_error("Couldn't parse token '" + t + "' as integer.");
-        }
-        return new Integer(value);
-    }
-
+    Atom *makeAtom(const Token &token);
+    
     template <typename InputIt>
     Sexp *readFromTokens(InputIt first, InputIt last) {
         // Handle individual atoms
@@ -311,4 +266,11 @@ namespace Wabi {
 
         return sexps;
     }
+
+    class symbol_not_found : public std::invalid_argument {
+    public:
+        explicit symbol_not_found(Sexp *symbol)
+            : std::invalid_argument("Symbol '" + std::string(*symbol) + "' not found.") {}
+    };
+
 }

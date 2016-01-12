@@ -1,7 +1,7 @@
 TOP_SRC ?= .
 -include $(TOP_SRC)/user.mk
 
-CXXFLAGS = -std=c++14 -Wall
+CXXFLAGS = -std=c++14 -Wall -g -Og
 
 SRC_DIRS = $(TOP_SRC)
 srcs := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.cc))
@@ -22,6 +22,8 @@ wabi: $(objs)
 %.d:	%.cc
 	@echo "Building dependencies for $<..."
 	@set -e; rm -f $@; \
-	 $(CXX) -M $(CXXFLAGS) $(CPPFLAGS) $< > $@
+	 $(CXX) -M $(CXXFLAGS) $(CPPFLAGS) $< > $@.$$$$; \
+	 sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
+	 rm -f $@.$$$$
 
 -include $(deps)

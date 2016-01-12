@@ -68,12 +68,18 @@ int main(int argc, char *argv[]) {
     // Make sure we show decimals on floating point output
     cout << showpoint;
 
+    PopulateStandardEnvironment();
+
     while (cin) {
         deque<unique_ptr<Sexp>> sexps;
         read(cout, cerr, cin, back_inserter(sexps));
 
         for (auto sexp = sexps.begin(); sexp != sexps.end(); ++sexp) {
-            cout << (*sexp) << ": '" << (*sexp)->eval() << endl;
+            try {
+                cout << (*sexp) << ": '" << (*sexp)->eval() << endl;
+            } catch (const symbol_not_found& snf) {
+                cerr << snf.what() << endl;
+            }
         }
     }
     return 0;
