@@ -91,7 +91,7 @@ int readToken(CharGetter getNextChar, CharUngetter ungetNextChar, Token *token, 
 }
 
 Sexp *makeAtom(Token *token) {
-    Sexp *atom = malloc(sizeof(Sexp));
+    Sexp *atom = allocateSexp();
     
     // For most of these, we'll need a null terminated string.
     // Go ahead and make that, and then reuse it in the Sexp if necessary.
@@ -186,7 +186,7 @@ Sexp *readFromTokens(Token *first, Token *last) {
 
     Token *next = first + 1;
 
-    Sexp *head = malloc(sizeof(Sexp));
+    Sexp *head = allocateSexp();
     Sexp *node = head;
     while (node != &nil && next < (last - 1)) {
         node->type = Cons;
@@ -212,7 +212,7 @@ Sexp *readFromTokens(Token *first, Token *last) {
             node = &nil;
         } else {
             if (next < (last - 1)) {
-                node->Cons.cdr = malloc(sizeof(Sexp));
+                node->Cons.cdr = allocateSexp();
                 node = node->Cons.cdr;
             } else {
                 node->Cons.cdr = &nil;
