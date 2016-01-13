@@ -20,8 +20,10 @@ int main(int argc, char *argv[]) {
         putchar(' ');
         sexp = readSexp(getchar, ungetchar);
         putchar('\n');
+#ifdef ebugSexps
         dump(sexp);
         putchar('\n');
+#endif
         if (0 != sexp && &nil != sexp) { free(sexp); }
         if (ferror(stdin)) {
             perror("Error reading sexps");

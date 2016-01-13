@@ -5,8 +5,9 @@ PLATFORM ?=
 
 CC = $(PLATFORM)gcc
 CXX = $(PLATFORM)g++
-CFLAGS = -Wall -g -Og
-CXXFLAGS = -std=c++14 $(CFLAGS)
+CFLAGS = -std=c11 -Wall -g -Og $(USER_CFLAGS)
+CXXFLAGS = -std=c++14 -Wall -g -Og $(USER_CXXFLAGS)
+CPPFLAGS = -D_POSIX_SOURCE $(USER_CPPFLAGS)
 
 SRC_DIRS = $(TOP_SRC)
 srcs := $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.c))

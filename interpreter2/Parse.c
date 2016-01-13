@@ -280,11 +280,13 @@ Sexp *readSexp(CharGetter getNextChar, CharUngetter ungetNextChar) {
         return 0;
     }
 
+#ifdef ebugTokens
     for (Token *t = tokens; t < token; ++t) {
         printf("Token: %ld '", t->length);
         for (size_t l = 0; l < t->length; ++l) { putchar(t->text[l]); }
         printf("'\n");
     }
+#endif
 
     return readFromTokens(tokens, token);
 }

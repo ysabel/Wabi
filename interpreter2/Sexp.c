@@ -41,17 +41,15 @@ void dump(Sexp *sexp) {
     
     switch(sexp->type) {
     case Integer:
-        printf("{Integer}%ld", sexp->Integer);
+        printf("%ld{Integer}", sexp->Integer);
         break;
     case Float:
-        printf("{Float}%g", sexp->Float);
+        printf("%g{Float}", sexp->Float);
         break;
     case Symbol:
-        printf("{Symbol}");
         for (size_t c = 0; c < sexp->Symbol.length; ++c) { putchar(sexp->Symbol.text[c]); }
         break;
     case Cons:
-        printf("{Cons}");
         putchar('(');
         dump(sexp->Cons.car);
         putchar(' ');
