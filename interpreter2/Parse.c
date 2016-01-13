@@ -1,6 +1,7 @@
 #include "Parse.h"
 
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,8 +11,27 @@ typedef struct Token {
     const char *text;
 } Token;
 
+static const char *parserReadingFrom = "interactive";
+static unsigned int line, column;
+
+void resetInput(const char *input) {
+    parserReadingFrom = input;
+    line = 0;
+    column = 0;
+}
+
+static void parseError(const char *format, ...) {
+    fprintf(stderr, "%s:%d:%02d: ", parserReadingFrom, line, column);
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+}
+
 int isstart(Token *token) { return 1 == token->length && '(' == token->text[0]; }
 int isend(Token *token) { return 1 == token->length && ')' == token->text[0]; }
+int isdot(Token *token) { return 1 == token->length && '.' == token->text[0]; }
+int isquote(Token *token) { return 1 == token->length && '\'' == token->text[0]; }
 
 int readToken(CharGetter getNextChar, CharUngetter ungetNextChar, Token *token, char **character) {
     int done = 0;
@@ -20,6 +40,7 @@ int readToken(CharGetter getNextChar, CharUngetter ungetNextChar, Token *token, 
     while (!done) {
         char *current = *character;
         int next = getNextChar();
+        ++column;
         if (0 > next) {
             if (0 != start) {
                 token->length = current - start;
@@ -36,6 +57,7 @@ int readToken(CharGetter getNextChar, CharUngetter ungetNextChar, Token *token, 
         case '\'':
             if (0 != start) {
                 ungetNextChar(next);
+                --column;
                 token->length = current - start;
                 token->text = start;
             } else {
@@ -44,11 +66,14 @@ int readToken(CharGetter getNextChar, CharUngetter ungetNextChar, Token *token, 
             }
             done = 1;
             break;
-        case '\t':
         case '\n':
-        case '\v':
-        case '\f':
         case '\r':
+        case '\f':
+            column = 0;
+            ++line;
+            /* Intentional fallthrough */
+        case '\t':
+        case '\v':
         case ' ':
             if (0 != start) {
                 token->length = current - start;
@@ -104,9 +129,7 @@ Sexp *makeAtom(Token *token) {
             base = "octal";
         }
         if (token->length != end - buffer) {
-            fprintf(stderr, "Couldn't parse token '%s' as %s constant.", buffer, base);
-            free(atom);
-            atom = &nil;
+            parseError("Warning: Couldn't parse token '%s' as %s constant, using %d.\n", buffer, base, atom->Integer);
         }
         free(buffer);
         return atom;
@@ -118,9 +141,7 @@ Sexp *makeAtom(Token *token) {
             atom->type = Float;
             atom->Float = strtof(buffer, &end);
             if (token->length != end - buffer) {
-                fprintf(stderr, "Couldn't parse token '%s' as float.", buffer);
-                free(atom);
-                atom = &nil;
+                parseError("Warning: Couldn't parse token '%s' as float, using %f.\n", buffer, atom->Float);
             }
             free(buffer);
             return atom;
@@ -130,12 +151,22 @@ Sexp *makeAtom(Token *token) {
     atom->type = Integer;
     atom->Integer = strtol(buffer, &end, 10);
     if (token->length != end - buffer) {
-        fprintf(stderr, "Couldn't parse token '%s' as integer.", buffer);
-        free(atom);
-        atom = &nil;
+        parseError("Warning: Couldn't parse token '%s' as integer, using %d.\n", buffer, atom->Integer);
     }
     free(buffer);
     return atom;
+}
+
+Sexp *readFromTokens(Token *first, Token *last);
+
+Sexp *readSubexpression(Token *first, Token **last) {
+    unsigned int depth = 0;
+    do {
+        if (isstart(*last)) { ++depth; }
+        if (isend(*last)) { --depth; }
+        ++(*last);
+    } while (0 < depth);
+    return readFromTokens(first, *last);
 }
 
 Sexp *readFromTokens(Token *first, Token *last) {
@@ -157,63 +188,97 @@ Sexp *readFromTokens(Token *first, Token *last) {
 
     Sexp *head = malloc(sizeof(Sexp));
     Sexp *node = head;
-    while (next < (last - 1)) {
+    while (node != &nil && next < (last - 1)) {
         node->type = Cons;
         if (isstart(next)) {
-            Token *subfirst = next;
-            Token *sublast = next;
-            unsigned int depth = 0;
-            do {
-                if (isstart(sublast)) { ++depth; }
-                if (isend(sublast)) { --depth; }
-                ++sublast;
-            } while (0 < depth);
-            node->Cons.car = readFromTokens(subfirst, sublast);
-            next = sublast;
+            node->Cons.car = readSubexpression(next, &next);
         } else {
             node->Cons.car = makeAtom(next);
             ++next;
         }
-        if (next < (last - 1)) {
-            node->Cons.cdr = malloc(sizeof(Sexp));
-            node = node->Cons.cdr;
-        } else {
-            node->Cons.cdr = &nil;
+
+        if (next < (last - 2) && isdot(next)) {
+            if (node != head) {
+                parseError("Error: Cons cell with multiple sexps before the ., truncating list.\n");
+                node->Cons.cdr = &nil;
+            } else {
+                ++next;
+                node->Cons.cdr = readSubexpression(next, &next);
+                if (!isend(next)) {
+                    parseError("Error: Cons cell with multiple sexps after the ., truncating list.\n");
+                    node->Cons.cdr = &nil;
+                }
+            }
             node = &nil;
+        } else {
+            if (next < (last - 1)) {
+                node->Cons.cdr = malloc(sizeof(Sexp));
+                node = node->Cons.cdr;
+            } else {
+                node->Cons.cdr = &nil;
+                node = &nil;
+            }
         }
     }
     return head;
 }
 
-Sexp *read(CharGetter getNextChar, CharUngetter ungetNextChar) {
+int readBalancedTokens(CharGetter getNextChar, CharUngetter ungetNextChar,
+                       char **buffer, char *bufferEnd,
+                       Token **token, const Token *lastToken) {
+    unsigned int depth = 0;
+    do {
+        int status = readToken(getNextChar, ungetNextChar, *token, buffer);
+        if (0 > status) {
+            return status;
+        }
+        
+        if (isstart(*token)) { ++depth; }
+        if (isend(*token)) {
+            if (0 < depth) { --depth; }
+            else {
+                parseError("Error: Extra ) found, discarding.\n");
+                continue;
+            }
+        }
+        if (isquote(*token)) {
+            (*token)->text = "(";
+            ++(*token);
+            (*token)->length = 5;
+            (*token)->text = "quote";
+            ++(*token);
+            status = readBalancedTokens(getNextChar, ungetNextChar,
+                                        buffer, bufferEnd,
+                                        token, lastToken);
+            (*token)->length = 1;
+            (*token)->text = ")";
+            if (0 != status) { return status; }
+        }
+        ++(*token);
+    } while (0 < depth && (*token) < lastToken && (*buffer) < bufferEnd);
+    return depth;
+}
+
+Sexp *readSexp(CharGetter getNextChar, CharUngetter ungetNextChar) {
     const size_t CharBuffer = 8192;
     const size_t TokenBuffer = 255;
 
     char characters[CharBuffer];
     Token tokens[TokenBuffer];
-    unsigned int depth = 0;
     char *character = characters;
     Token *token = tokens;
-    do {
-        int status = readToken(getNextChar, ungetNextChar, token, &character);
-        if (0 > status) {
-            fprintf(stderr, "readToken() returned %d\n", status);
-            return 0;
-        }
-        
-        if (isstart(token)) { ++depth; }
-        if (isend(token)) { --depth; }
-        ++token;
-    } while (0 < depth && token < tokens + TokenBuffer);
-
-    if (0 < depth) {
+    int status = readBalancedTokens(getNextChar, ungetNextChar,
+                                    &character, characters + CharBuffer,
+                                    &token, tokens + TokenBuffer);
+    if (0 < status) {
         // Ran out of buffer space before we got an sexp, print an
         // error.
-        fprintf(stderr, "Ran out of buffer space before we got a complete sexp, discarding.");
+        parseError("Error: Ran out of %s buffer space before we got a complete sexp, discarding.\n",
+                   (character < characters + CharBuffer ? "token" : "character"));
         return &nil;
+    } else if (0 > status) {
+        return 0;
     }
-
-    printf("%p %p\n", tokens, token);
 
     for (Token *t = tokens; t < token; ++t) {
         printf("Token: %ld '", t->length);

@@ -4,4 +4,5 @@
 typedef int(*CharGetter)();
 typedef int(*CharUngetter)(int);
 
-Sexp *read(CharGetter getNextChar, CharUngetter ungetNextChar);
+void resetInput(const char *input);
+Sexp *readSexp(CharGetter getNextChar, CharUngetter ungetNextChar);
